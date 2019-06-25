@@ -1,11 +1,13 @@
 //== Wall Drawing Machine https://github.com/shihaipeng03/Walldraw ==
 //https://somebodys.taobao.com/
+//有名称的店铺
 
 
-#include <Stepper_28BYJ_48.h>
+
+#include <TinyStepper_28BYJ_48.h>
 #include <Servo.h>
 
-#include <SD.h>
+#include <SD.h>  //需要SD卡读卡器模块，或者tf读卡器模块
 
 
 
@@ -14,16 +16,16 @@
 //调试标志
 
 
-#define STEPS_PER_TURN  (512)  //步进电机一周步长 512步转360度
-#define SPOOL_DIAMETER  (35)   //线轴直径mm
+#define STEPS_PER_TURN  (2048)  //步进电机一周步长 512步转360度
+#define SPOOL_DIAMETER  (35)    //线轴直径mm
 #define SPOOL_CIRC      (SPOOL_DIAMETER * 3.1416)  //线轴周长 35*3.14=109.956
-#define TPS             (SPOOL_CIRC / STEPS_PER_TURN)  //步进电机步距，最小分辨率 每步线绳被拉动的距离  0.2147578mm
-#define SPM             (1 / TPS)     //每毫米几步 1 / 0.2147578 = 4.6564
+#define TPS             (SPOOL_CIRC / STEPS_PER_TURN)  //步进电机步距，最小分辨率 每步线绳被拉动的距离  0.0268447265625mm
 
 
 
-#define step_delay      0   //步进电机每步的等候时间 （微妙）
-#define TPD             400   //转弯等待时间（毫秒），由于惯性笔会继续运动，暂定等待笔静止再运动。
+#define step_delay      1   //步进电机每步的等候时间 （微妙）
+#define TPD             300   //转弯等待时间（毫秒），由于惯性笔会继续运动，暂定等待笔静止再运动。
+
 
 //两个电机的旋转方向  1正转  -1反转  
 //调节进出方向可垂直反转图像
@@ -36,15 +38,15 @@
 static long laststep1, laststep2; //当前线长度 记录笔位置
 
 
-#define X_SEPARATION  570           //两绳上方的水平距离mm 
+#define X_SEPARATION  560           //两绳上方的水平距离mm 
 #define LIMXMAX       ( X_SEPARATION*0.5)   //x轴最大值  0位在画板中心
 #define LIMXMIN       (-X_SEPARATION*0.5)   //x轴最小值
 
 /* 垂直距离的参数： 正值在画板下放，理论上只要画板够大可以无限大，负值区域在笔（开机前）的上方 
 详细介绍见说明文档 https://github.com/shihaipeng03/Walldraw
 */
-#define LIMYMAX         (-300)     //y轴最大值 画板最下方
-#define LIMYMIN         (300)    //y轴最小值 画板最上方  左右两线的固定点到笔的垂直距离，尽量测量摆放准确，误差过大会有畸变
+#define LIMYMAX         (-300)   //y轴最大值 画板最下方
+#define LIMYMIN         (350)    //y轴最小值 画板最上方  左右两线的固定点到笔的垂直距离，尽量测量摆放准确，误差过大会有畸变
                 //值缩小画图变瘦长，值加大画图变矮胖 
 
 
@@ -79,18 +81,20 @@ static float feed_rate = 0;
 static int ps;
 
 /*以下为G代码通讯参数 */
-#define BAUD            (9600)    //串口速率，用于传输G代码或调试 可选9600，57600，115200 或其他常用速率
+#define BAUD            (115200)    //串口速率，用于传输G代码或调试 可选9600，57600，115200 或其他常用速率
 #define MAX_BUF         (64)      //串口缓冲区大小
 
+// Serial comm reception
+static int sofar;               // Serial buffer progress
 
 static float mode_scale;   //比例
 
-File myFile;  //从sd卡读取Gcode文件 
+File myFile;
 
-Servo pen;    //抬笔舵机
+Servo pen;
 
-Stepper_28BYJ_48 m1(7,8,9,10);  //M1 L步进电机   in1~4端口对应UNO  7 8 9 10
-Stepper_28BYJ_48 m2(2,3,5,6);  //M2 R步进电机   in1~4端口对应UNO 2 3 5 6  ！没有4#口 预留给sd读卡器用
+TinyStepper_28BYJ_48 m1; //(7,8,9,10);  //M1 L步进电机   in1~4端口对应UNO  7 8 9 10
+TinyStepper_28BYJ_48 m2; //(2,3,5,6);  //M2 R步进电机   in1~4端口对应UNO 2 3 5 6
 
 
 
@@ -169,7 +173,7 @@ void pen_up()
 }
 
 //------------------------------------------------------------------------------
-//调试代码串口输出机器状态，调试用代码
+//调试代码串口输出机器状态
 void where() {
   Serial.print("X,Y=  ");
   Serial.print(posx);
@@ -186,7 +190,7 @@ void where() {
 
 
 //------------------------------------------------------------------------------
-//角度计算函数
+// returns angle of dy/dx as a value from 0...2PI
 static float atan3(float dy, float dx) {
   float a = atan2(dy, dx);
   if (a < 0) a = (PI * 2.0) + a;
@@ -242,7 +246,8 @@ static void arc(float cx, float cy, float x, float y,  float dir) {
 
 
 //------------------------------------------------------------------------------
-// 设置XY位置，不移动笔
+// instantly move the virtual plotter position
+// does not validate if the move is valid
 static void teleport(float x, float y) {
   posx = x;
   posy = y;
@@ -286,30 +291,31 @@ void moveto(float x,float y) {
 
   long ad1=abs(d1);
   long ad2=abs(d2);
-  int dir1=d1<0 ? M1_REEL_IN : M1_REEL_OUT;
-  int dir2=d2<0 ? M2_REEL_IN : M2_REEL_OUT;
+  int dir1=d1>0 ? M1_REEL_IN : M1_REEL_OUT;
+  int dir2=d2>0 ? M2_REEL_IN : M2_REEL_OUT;
   long over=0;
   long i;
 
 
   if(ad1>ad2) {
     for(i=0;i<ad1;++i) {
-      m1.step(dir1);
+      
+      m1.moveRelativeInSteps(dir1);
       over+=ad2;
       if(over>=ad1) {
         over-=ad1;
-        m2.step(dir2);
+        m2.moveRelativeInSteps(dir2);
       }
       delayMicroseconds(step_delay);
      }
   } 
   else {
     for(i=0;i<ad2;++i) {
-      m2.step(dir2);
+      m2.moveRelativeInSteps(dir2);
       over+=ad1;
       if(over>=ad2) {
         over-=ad2;
-        m1.step(dir1);
+        m1.moveRelativeInSteps(dir1);
       }
       delayMicroseconds(step_delay);
     }
@@ -324,6 +330,7 @@ void moveto(float x,float y) {
 }
 
 //------------------------------------------------------------------------------
+//长距离移动会走圆弧轨迹，所以将长线切割成短线保持直线形态
 static void line_safe(float x,float y) {
   // split up long lines to make them straighter?
   float dx=x-posx;
@@ -352,13 +359,6 @@ static void line_safe(float x,float y) {
 
 
 
-//=======================================================================================
-//------------------------------------------------------------------------------
-static void help() {
-  Serial.println(F("== Wall Drawing Machine https://github.com/shihaipeng03/Walldraw =="));
-  Serial.println(F(" "));
-  
-}
 
 
 void line(float x,float y) 
@@ -367,118 +367,8 @@ void line(float x,float y)
 }
 
 
-//蝴蝶曲线
-void butterfly_curve(int xx,int yy,int lines,int x_scale,int y_scale)
-//xx,yy 蝴蝶中心位置， lines 圈数，越多越复杂  x_scale，y_scale xy轴的放大比例
-{
-  float xa,ya,p,e;
-  for(float i=0;i<6.28*lines;i+=3.14/180)
-  {
-     if (i==0) 
-      pen_up();
-    else
-      pen_down();
-    p=pow(sin(i/12),5);
-    e=pow(2.71828,cos(i));
-
-    xa=x_scale * sin(i) * (e - 2*cos(4*i) + p);
-    ya=y_scale * cos(i) * (e - 2*cos(4*i) + p);
-    arc(posx,posy,xa+xx,ya+yy,1); 
-  }
-  pen_up();
-}  
-
-//桃心曲线
-void heart_curve(int xx,int yy,float x_scale,float y_scale)
-//xx,yy 桃心曲线中心位置， x_scale，y_scale xy轴的放大比例
-{
-  float xa,ya;
-  for(float i=0;i<6.28;i+=3.14/180)
-  {
-    if (i==0) 
-      pen_up();
-    else
-      pen_down();
-        
-    xa=x_scale * pow(sin(i),3) * 15;
-    ya=y_scale * (15*cos(i) -5*cos(2*i) - 2*cos(3*i) - cos(4*i));
-    arc(posx,posy,xa+xx,ya+yy,1); 
-  }
-  pen_up();
-} 
-
-//方框
-void rectangle(float xx,float yy,float dx,float dy,float angle)
-{
-  float six,csx,siy,csy;
-  dx/=2;
-  dy/=2;
-
-  six = sin(angle/180*3.14) * dx;
-  csx = cos(angle/180*3.14) * dx;
-  
-  siy = sin(angle/180*3.14) * dy;
-  csy = cos(angle/180*3.14) * dy;
-  
-
-  pen_up();
-  line_safe(csx - siy + xx,six + csy + yy);
-  pen_down();
-  line_safe(xx - csx - siy,csy - six + yy);
-  line_safe(xx - csx + siy,yy - csy - six);
-  line_safe(csx + siy + xx,six - csy + yy);
-  line_safe(csx - siy + xx,six + csy + yy);
-  pen_up();
-
-
-}
-
-//方框
-void box(float xx,float yy,float dx,float dy)
-{
-    pen_up();
-    line_safe(xx , yy);
-    pen_down();
-   delay(TPD);
-     line_safe(xx + dx, yy);
-   delay(TPD);
-     line_safe(xx + dx, yy+ dy);
-   delay(TPD);
-     line_safe(xx , yy + dy);
-   delay(TPD);
-   line_safe(xx , yy);
-   pen_up();
-
-}
-
-void circle(float xx,float yy,float radius_x,float radius_y)
-{
-  float rx,ry;
-   for(float i=0;i<6.28;i+=3.14/180)
-  {
-
-    if (i==0) 
-      pen_up();
-    else
-      pen_down();
-
-    rx = sin(i) * radius_x;
-    ry = cos(i) * radius_y;
-    line_safe(xx+rx,yy+ry);
-  }
-  pen_up();
-}
-
-void star(float xx,float yy,float radius_r,int corner)
-{
-  
-}
-
-
-
 
 //********************************
-//简单gcode代码分析处理
 void nc(String st)
 {
 
@@ -502,7 +392,7 @@ int ok=1;
     {   
       zz = st.substring(pz+1,st.length());
       z  = zz.toFloat();
-      if (z>0) pen_up();
+      if (z>0)  pen_up();
       if (z<=0) pen_down();
     }
 
@@ -519,8 +409,7 @@ int ok=1;
 }
 
 //**********************
-
-void draw_sdcard_gcode_file(String filename)
+void drawfile( String filename)
 {
 
   String rd="";
@@ -555,6 +444,14 @@ void draw_sdcard_gcode_file(String filename)
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(BAUD);
+  m1.connectToPins(7,8,9,10); //M1 L步进电机   in1~4端口对应UNO  7 8 9 10
+  m2.connectToPins(2,3,5,6);  //M2 R步进电机   in1~4端口对应UNO 2 3 5 6
+  m1.setSpeedInStepsPerSecond(10000);
+  m1.setAccelerationInStepsPerSecondPerSecond(100000);
+  m2.setSpeedInStepsPerSecond(10000);
+  m2.setAccelerationInStepsPerSecondPerSecond(100000);
+
+
   //抬笔舵机
   pen.attach(A0);
   ps=PEN_UP_ANGLE;
@@ -578,11 +475,7 @@ void setup() {
 
 
 void loop() {
-  
- 
-    
 
-  draw_sdcard_gcode_file("3.nc"); //不支持中文文件名
-
+  drawfile("1.nc");  //1.nc 是Gcode代码的文件名 ，需要将g代码保存在sd卡上。
   while(1);
 }
