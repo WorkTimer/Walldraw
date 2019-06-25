@@ -30,13 +30,13 @@ void setup()
   stepper1.setSpeed(256);           //速度
   //视 FULLSTEP 或 HALFSTEP， 1024 或 512 步进电机转一周   
   //设置电机1的旋转步数 可调节（数字越大，图形尺寸越大）
-  stepper1.moveTo(226);
+  stepper1.moveTo(790);
   
   stepper2.setMaxSpeed(1000.0);
   stepper2.setAcceleration(256.0);
   stepper2.setSpeed(256);
   //同stepper1
-  stepper2.moveTo(226);  
+  stepper2.moveTo(1226);  
   
 }
 void loop()  
