@@ -476,6 +476,6 @@ void setup() {
 
 void loop() {
 
-  drawfile("1.nc");  //1.nc 是Gcode代码的文件名 ，需要将g代码保存在sd卡上。
+  drawfile("3.nc");  //1.nc 是Gcode代码的文件名 ，需要将g代码保存在sd卡上。
   while(1);
 }
