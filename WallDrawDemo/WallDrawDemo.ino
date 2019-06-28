@@ -411,6 +411,40 @@ void circle(float xx,float yy,float radius_x,float radius_y)
   pen_up();
 }
 
+//圆弧
+void arc(float xx,float yy,float radius,float sangle,float eangle)
+{
+  float rx,ry,i;
+  sangle+=360;
+  eangle+=360;
+  sangle=sangle / 180 * PI; //换算成弧度 360度=2Π
+  eangle=eangle / 180 * PI; 
+  float st= 3.14159 / 360; //圆分割精度
+   pen_up();
+   line(xx+cos(sangle)*radius,yy+sin(sangle)*radius);
+   pen_down();
+   if (sangle<eangle)
+   {
+      for(i=sangle;i<eangle;i+=st)
+      {
+        rx = cos(i) * radius;
+        ry = sin(i) * radius;
+        line(xx+rx,yy+ry);
+      }
+   }
+   else
+   {
+      for(i=sangle;i>eangle;i-=st)
+      {
+        rx = cos(i) * radius;
+        ry = sin(i) * radius;
+        line(xx+rx,yy+ry);
+      }
+   }
+   
+  pen_up();
+}
+
 //星
 void star(float xx,float yy,float radius_r,int corner)
 {
@@ -453,6 +487,41 @@ void setup() {
 
 void loop() {
 //Demo 程序会画一些简单的图形延时，请在调试好参数后，将A4或更大的纸张，中心对准笔架再开机。
+  //demo1();
+  demo2();
+
+  
+   moveto(0,0);
+ 
+}
+
+
+void demo2()
+{
+  int rd=0;
+  float sa,ea;
+  rd=random(10);
+  sa=random(0,360);
+  do {
+    
+    if (rd >95) rd=100;
+    else        rd+=random(8,15);
+    
+    ea=random(5,15);
+    int z=map(random(0,2),0,1,-1,1);
+    ea=sa+ea*z;
+    Serial.println("sa:"+String(sa)+"  ea:"+String(ea));
+    pen_down();
+    
+    line(cos(sa/180*PI)*rd,sin(sa/180*PI)*rd);
+    arc(0,0,rd,sa,ea);
+    sa=ea;
+  } while (rd<100);
+  
+}
+
+void demo1()
+{
  pen_up();
  box(-45,0,90,90);
  moveto(-15,0);
@@ -488,7 +557,4 @@ void loop() {
  heart_curve(-45,-45,2,2);
  //蝴蝶线 参数说明(x,y位置，圈数越大越复杂，x放大倍率，y放大倍率)
  butterfly_curve(45,-55,3,12,12);
-
- moveto(0,0);
- while(1);
 }
